@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BioBridge</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- STATE 1: Locked (Default) -->
+    <div id="screen-locked" class="screen active">
+      <div class="header">
+        <div class="logo">🔒</div>
+        <h1>BioBridge</h1>
+        <p class="subtitle">Authenticate to access your vault</p>
+      </div>
+      <div class="content">
+        <button id="btn-authenticate" class="btn btn-primary">
+          <span class="btn-icon">👆</span>
+          Use Fingerprint
+        </button>
+        <button id="btn-goto-setup" class="btn btn-link">
+          Setup Recovery Email
+        </button>
+      </div>
+    </div>
+
+    <!-- STATE 2a: Verified (Unlocked) -->
+    <div id="screen-unlocked" class="screen">
+      <div class="header header-success">
+        <div class="logo">✅</div>
+        <h1>BioBridge</h1>
+        <p class="subtitle">Vault Unlocked</p>
+      </div>
+      <div class="content">
+        <div id="credentials-list" class="credentials-list">
+          <!-- Credentials will be injected here by JS -->
+          <div class="empty-state" id="empty-state">
+            <p>No saved credentials yet.</p>
+            <p class="hint">Visit a login page to save your first credential.</p>
+          </div>
+        </div>
+      </div>
+      <div class="footer">
+        <button id="btn-add-new" class="btn btn-secondary btn-small">➕ Add New</button>
+        <button id="btn-settings" class="btn btn-secondary btn-small">⚙️ Settings</button>
+        <button id="btn-lock" class="btn btn-danger btn-small">🔒 Lock</button>
+      </div>
+    </div>
+
+    <!-- STATE 2b: Failed -->
+    <div id="screen-failed" class="screen">
+      <div class="header header-error">
+        <div class="logo">❌</div>
+        <h1>BioBridge</h1>
+        <p class="subtitle">Biometric Authentication Failed</p>
+      </div>
+      <div class="content">
+        <button id="btn-retry" class="btn btn-primary">
+          <span class="btn-icon">🔄</span>
+          Try Again
+        </button>
+        <button id="btn-goto-recovery" class="btn btn-secondary">
+          <span class="btn-icon">📧</span>
+          Email Recovery
+        </button>
+      </div>
+    </div>
+
+    <!-- STATE 3: Recovery -->
+    <div id="screen-recovery" class="screen">
+      <div class="header">
+        <div class="logo">📧</div>
+        <h1>Recovery</h1>
+        <p class="subtitle">Code sent to <span id="recovery-email-masked">m***@gmail.com</span></p>
+      </div>
+      <div class="content">
+        <div class="otp-input-group">
+          <input type="text" maxlength="1" class="otp-box" data-index="0" autofocus>
+          <input type="text" maxlength="1" class="otp-box" data-index="1">
+          <input type="text" maxlength="1" class="otp-box" data-index="2">
+          <input type="text" maxlength="1" class="otp-box" data-index="3">
+          <input type="text" maxlength="1" class="otp-box" data-index="4">
+          <input type="text" maxlength="1" class="otp-box" data-index="5">
+        </div>
+        <p id="otp-error" class="error-text hidden"></p>
+        <button id="btn-verify-otp" class="btn btn-primary">
+          ✅ Verify Code
+        </button>
+        <div class="recovery-info">
+          <p>Expires in <span id="otp-timer">5:00</span></p>
+          <p>Attempts: <span id="otp-attempts">0</span>/3</p>
+        </div>
+        <button id="btn-recovery-back" class="btn btn-link">← Back</button>
+      </div>
+    </div>
+
+    <!-- SETTINGS SCREEN -->
+    <div id="screen-settings" class="screen">
+      <div class="header">
+        <div class="logo">⚙️</div>
+        <h1>Settings</h1>
+      </div>
+      <div class="content">
+        <div class="settings-group">
+          <label>Recovery Email</label>
+          <div class="input-row">
+            <input type="email" id="input-recovery-email" placeholder="your@email.com">
+            <button id="btn-save-email" class="btn btn-small btn-primary">Save</button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <label>Vault Actions</label>
+          <button id="btn-export" class="btn btn-secondary btn-full">📦 Export Backup</button>
+          <button id="btn-import" class="btn btn-secondary btn-full">📥 Import Backup</button>
+        </div>
+        <button id="btn-settings-back" class="btn btn-link">← Back</button>
+      </div>
+    </div>
+
+    <!-- EDIT CREDENTIAL SCREEN -->
+    <div id="screen-edit" class="screen">
+      <div class="header">
+        <div class="logo">✏️</div>
+        <h1>Edit Credential</h1>
+        <p class="subtitle" id="edit-site-name"></p>
+      </div>
+      <div class="content">
+        <div class="settings-group">
+          <label>Username</label>
+          <input type="text" id="edit-username" class="input-full">
+        </div>
+        <div class="settings-group">
+          <label>Password</label>
+          <div class="input-row">
+            <input type="password" id="edit-password" class="input-full">
+            <button id="btn-toggle-password" class="btn btn-small btn-secondary">👁️</button>
+          </div>
+        </div>
+        <div class="edit-actions">
+          <button id="btn-save-edit" class="btn btn-primary btn-full">💾 Save Changes</button>
+          <button id="btn-cancel-edit" class="btn btn-link">← Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADD CREDENTIAL SCREEN -->
+    <div id="screen-add" class="screen">
+      <div class="header">
+        <div class="logo">➕</div>
+        <h1>Add Credential</h1>
+      </div>
+      <div class="content">
+        <div class="settings-group">
+          <label>Website URL</label>
+          <input type="text" id="add-site" placeholder="example.com" class="input-full">
+        </div>
+        <div class="settings-group">
+          <label>Username</label>
+          <input type="text" id="add-username" placeholder="your username" class="input-full">
+        </div>
+        <div class="settings-group">
+          <label>Password</label>
+          <input type="password" id="add-password" placeholder="your password" class="input-full">
+        </div>
+        <div class="edit-actions">
+          <button id="btn-save-add" class="btn btn-primary btn-full">💾 Save Credential</button>
+          <button id="btn-cancel-add" class="btn btn-link">← Back</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
