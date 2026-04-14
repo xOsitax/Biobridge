@@ -36,8 +36,8 @@ const otpBoxes = document.querySelectorAll('.otp-box');
 
 otpBoxes.forEach((box, index) => {
   box.addEventListener('input', (e) => {
-    const value = e.target.value;
-    if (value && index < otpBoxes.length - 1) {
+    e.target.value = e.target.value.replace(/[^0-9]/g, '');
+    if (e.target.value && index < otpBoxes.length - 1) {
       otpBoxes[index + 1].focus();
     }
   });
@@ -46,11 +46,6 @@ otpBoxes.forEach((box, index) => {
     if (e.key === 'Backspace' && !box.value && index > 0) {
       otpBoxes[index - 1].focus();
     }
-  });
-
-  // Only allow numbers
-  box.addEventListener('input', (e) => {
-    e.target.value = e.target.value.replace(/[^0-9]/g, '');
   });
 });
 
@@ -90,12 +85,208 @@ function stopOtpTimer() {
   clearInterval(otpTimerInterval);
 }
 
+// =========================================================
+// ===== WEBAUTHN — Runs directly in popup context =====
+// =========================================================
+
+const RP_NAME = 'BioBridge';
+
+/**
+ * Check if platform authenticator (Touch ID / Windows Hello) is available
+ */
+async function isBiometricAvailable() {
+  if (!window.PublicKeyCredential) return false;
+  try {
+    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Register biometric credential (first time setup)
+ * Triggers Touch ID / Windows Hello enrollment
+ * Returns credential ID as base64 string
+ */
+async function registerBiometric() {
+  const userId = crypto.getRandomValues(new Uint8Array(16));
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+
+  const createOptions = {
+    publicKey: {
+      challenge: challenge,
+      rp: {
+        name: RP_NAME,
+        // Don't set rp.id — let the browser use the default (extension origin)
+      },
+      user: {
+        id: userId,
+        name: 'biobridge-user',
+        displayName: 'BioBridge User',
+      },
+      pubKeyCredParams: [
+        { alg: -7, type: 'public-key' },    // ES256
+        { alg: -257, type: 'public-key' },   // RS256
+      ],
+      authenticatorSelection: {
+        authenticatorAttachment: 'platform',  // Use built-in sensor
+        userVerification: 'required',         // Must verify identity
+        residentKey: 'discouraged',
+      },
+      timeout: 120000,
+    },
+  };
+
+  const credential = await navigator.credentials.create(createOptions);
+  return bufferToBase64(credential.rawId);
+}
+
+/**
+ * Authenticate with biometrics (returning user)
+ * Triggers Touch ID / Windows Hello prompt
+ * Returns true on success, throws on failure
+ */
+async function authenticateBiometric(credentialIdB64) {
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+
+  const getOptions = {
+    publicKey: {
+      challenge: challenge,
+      allowCredentials: [
+        {
+          id: base64ToBuffer(credentialIdB64),
+          type: 'public-key',
+          transports: ['internal'],
+        },
+      ],
+      userVerification: 'required',
+      timeout: 120000,
+    },
+  };
+
+  // This line triggers the actual biometric prompt
+  await navigator.credentials.get(getOptions);
+  return true;
+}
+
+// ===== ENCODING HELPERS =====
+function bufferToBase64(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToBuffer(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+// =========================================================
+// ===== MAIN AUTHENTICATION FLOW =====
+// =========================================================
+
+document.getElementById('btn-authenticate').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-authenticate');
+  btn.innerHTML = '⏳ Waiting for biometric...';
+  btn.disabled = true;
+
+  try {
+    // Step 1: Check if biometrics are available on this device
+    const available = await isBiometricAvailable();
+    if (!available) {
+      showToast('No biometric sensor found on this device', 'error');
+      showScreen('failed');
+      resetAuthButton();
+      return;
+    }
+
+    // Step 2: Check if user has registered before
+    const settingsResp = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+    const credentialId = settingsResp?.data?.credentialId;
+
+    if (!credentialId) {
+      // ============================
+      // FIRST TIME SETUP
+      // ============================
+      btn.innerHTML = '👆 Place finger on sensor...';
+
+      // This triggers the biometric prompt (Touch ID / Windows Hello)
+      const newCredentialId = await registerBiometric();
+
+      // Tell background to generate encryption key and store credential ID
+      const setupResult = await chrome.runtime.sendMessage({
+        type: 'FIRST_TIME_SETUP',
+        credentialId: newCredentialId,
+      });
+
+      if (setupResult?.success) {
+        showToast('Biometric registered! Vault is ready.');
+        await loadCredentials();
+        showScreen('unlocked');
+      } else {
+        showToast('Setup failed: ' + (setupResult?.error || 'Unknown error'), 'error');
+        showScreen('failed');
+      }
+
+    } else {
+      // ============================
+      // RETURNING USER — VERIFY
+      // ============================
+      btn.innerHTML = '👆 Place finger on sensor...';
+
+      // This triggers the biometric prompt
+      await authenticateBiometric(credentialId);
+
+      // Biometric passed! Tell background to unlock the vault
+      const unlockResult = await chrome.runtime.sendMessage({ type: 'UNLOCK_VAULT' });
+
+      if (unlockResult?.success) {
+        showToast('Authentication successful!');
+        await loadCredentials();
+        showScreen('unlocked');
+      } else {
+        showToast('Vault unlock failed', 'error');
+        showScreen('failed');
+      }
+    }
+
+  } catch (err) {
+    console.error('Biometric error:', err);
+
+    if (err.name === 'NotAllowedError') {
+      showToast('Biometric was cancelled or denied', 'error');
+    } else if (err.name === 'SecurityError') {
+      showToast('Security error — try reloading the extension', 'error');
+    } else if (err.name === 'InvalidStateError') {
+      showToast('Biometric already registered. Try authenticating.', 'error');
+    } else {
+      showToast('Biometric failed: ' + (err.message || 'Unknown error'), 'error');
+    }
+
+    showScreen('failed');
+  } finally {
+    resetAuthButton();
+  }
+});
+
+function resetAuthButton() {
+  const btn = document.getElementById('btn-authenticate');
+  btn.innerHTML = '<span class="btn-icon">👆</span> Use Fingerprint';
+  btn.disabled = false;
+}
+
 // ===== CREDENTIAL RENDERING =====
 function renderCredentials(credentials) {
   const list = document.getElementById('credentials-list');
   const emptyState = document.getElementById('empty-state');
 
-  // Clear existing cards (keep empty state)
   list.querySelectorAll('.credential-card').forEach(c => c.remove());
 
   if (!credentials || Object.keys(credentials).length === 0) {
@@ -110,8 +301,8 @@ function renderCredentials(credentials) {
     card.className = 'credential-card';
     card.innerHTML = `
       <div class="credential-site">
-        <img class="credential-site-icon" 
-             src="https://www.google.com/s2/favicons?domain=${site}&sz=32" 
+        <img class="credential-site-icon"
+             src="https://www.google.com/s2/favicons?domain=${site}&sz=32"
              alt="" onerror="this.style.display='none'">
         ${site}
       </div>
@@ -139,7 +330,6 @@ document.getElementById('credentials-list').addEventListener('click', async (e) 
     currentEditSite = site;
     document.getElementById('edit-site-name').textContent = site;
 
-    // Request decrypted credentials from background
     const response = await chrome.runtime.sendMessage({
       type: 'GET_CREDENTIAL',
       site: site,
@@ -185,31 +375,14 @@ document.getElementById('btn-toggle-password').addEventListener('click', () => {
   input.type = input.type === 'password' ? 'text' : 'password';
 });
 
-// ===== BUTTON EVENT LISTENERS =====
+// ===== ALL OTHER BUTTON LISTENERS =====
 
-// Locked Screen → Authenticate
-document.getElementById('btn-authenticate').addEventListener('click', async () => {
-  try {
-    const response = await chrome.runtime.sendMessage({ type: 'AUTHENTICATE' });
-    if (response?.success) {
-      showToast('Authentication successful!');
-      await loadCredentials();
-      showScreen('unlocked');
-    } else {
-      showScreen('failed');
-    }
-  } catch (err) {
-    console.error('Auth error:', err);
-    showScreen('failed');
-  }
-});
-
-// Failed Screen → Try Again
+// Failed → Try Again
 document.getElementById('btn-retry').addEventListener('click', () => {
   showScreen('locked');
 });
 
-// Failed Screen → Go to Recovery
+// Failed → Go to Recovery
 document.getElementById('btn-goto-recovery').addEventListener('click', async () => {
   const response = await chrome.runtime.sendMessage({ type: 'START_RECOVERY' });
   if (response?.success) {
@@ -219,11 +392,11 @@ document.getElementById('btn-goto-recovery').addEventListener('click', async () 
     startOtpTimer(300);
     showScreen('recovery');
   } else {
-    showToast(response?.error || 'No recovery email set', 'error');
+    showToast(response?.error || 'No recovery email set. Go to Settings first.', 'error');
   }
 });
 
-// Recovery Screen → Verify OTP
+// Recovery → Verify OTP
 document.getElementById('btn-verify-otp').addEventListener('click', async () => {
   const otp = getOtpValue();
   if (otp.length !== 6) {
@@ -256,20 +429,20 @@ document.getElementById('btn-verify-otp').addEventListener('click', async () => 
   }
 });
 
-// Recovery Screen → Back
+// Recovery → Back
 document.getElementById('btn-recovery-back').addEventListener('click', () => {
   stopOtpTimer();
   showScreen('failed');
 });
 
-// Unlocked Screen → Lock
+// Unlocked → Lock
 document.getElementById('btn-lock').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'LOCK_VAULT' });
   showToast('Vault locked');
   showScreen('locked');
 });
 
-// Unlocked Screen → Settings
+// Unlocked → Settings
 document.getElementById('btn-settings').addEventListener('click', async () => {
   const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
   if (response?.success && response.data?.recoveryEmail) {
@@ -278,7 +451,7 @@ document.getElementById('btn-settings').addEventListener('click', async () => {
   showScreen('settings');
 });
 
-// Unlocked Screen → Add New
+// Unlocked → Add New
 document.getElementById('btn-add-new').addEventListener('click', () => {
   document.getElementById('add-site').value = '';
   document.getElementById('add-username').value = '';
@@ -286,7 +459,7 @@ document.getElementById('btn-add-new').addEventListener('click', () => {
   showScreen('add');
 });
 
-// Locked Screen → Setup Recovery
+// Locked → Setup Recovery
 document.getElementById('btn-goto-setup').addEventListener('click', () => {
   showScreen('settings');
 });
@@ -311,7 +484,7 @@ document.getElementById('btn-save-email').addEventListener('click', async () => 
   }
 });
 
-// Settings → Export Backup
+// Settings → Export
 document.getElementById('btn-export').addEventListener('click', async () => {
   const response = await chrome.runtime.sendMessage({ type: 'EXPORT_BACKUP' });
   if (response?.success) {
@@ -328,7 +501,7 @@ document.getElementById('btn-export').addEventListener('click', async () => {
   }
 });
 
-// Settings → Import Backup
+// Settings → Import
 document.getElementById('btn-import').addEventListener('click', () => {
   const input = document.createElement('input');
   input.type = 'file';
@@ -412,7 +585,7 @@ document.getElementById('btn-save-add').addEventListener('click', async () => {
     await loadCredentials();
     showScreen('unlocked');
   } else {
-    showToast('Save failed', 'error');
+    showToast(response?.error || 'Save failed', 'error');
   }
 });
 
