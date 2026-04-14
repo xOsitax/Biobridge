@@ -1,0 +1,74 @@
+/* ===== BioBridge Content Script Banner ===== */
+
+#biobridge-banner {
+  position: relative;
+  z-index: 2147483647;
+  margin-bottom: 12px;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  animation: bb-slideDown 0.2s ease;
+}
+
+@keyframes bb-slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.bb-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #1e293b;
+  border: 1px solid #4f46e5;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.bb-logo {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.bb-text {
+  font-size: 13px;
+  color: #f1f5f9;
+  flex: 1;
+}
+
+.bb-text-success { color: #10b981; }
+.bb-text-error { color: #f59e0b; }
+
+.bb-btn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.bb-btn:hover {
+  transform: translateY(-1px);
+}
+
+.bb-btn-primary {
+  background: #4f46e5;
+  color: white;
+}
+
+.bb-btn-primary:hover {
+  background: #4338ca;
+}
+
+.bb-btn-dismiss {
+  background: transparent;
+  color: #94a3b8;
+  padding: 4px 8px;
+  font-size: 14px;
+}
+
+.bb-btn-dismiss:hover {
+  color: #f1f5f9;
+}
